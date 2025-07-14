@@ -1,2 +1,0 @@
-Supabase access token
-sbp_5420c50495204bcb92e2b6d4cdad6ffffb665307

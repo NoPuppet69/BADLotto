@@ -3,10 +3,13 @@ import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/use-toast';
 import { Sparkles, Wallet, Check, Zap, Settings, ShoppingCart } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { useAppContext } from '@/contexts/AppContext';
 import AdminPanel from './AdminPanel';
 import TicketGrid from './TicketGrid';
 import PurchaseDialog from './PurchaseDialog';
 import StatsCards from './StatsCards';
+import GaslessIndicator from './GaslessIndicator';
+import InfoOverlay from './InfoOverlay';
 
 interface GridTicket {
   id: number;
@@ -14,25 +17,14 @@ interface GridTicket {
   price: number;
 }
 
-const ADMIN_WALLET = '0xa4e81327dd0Bc39f73787a127f069e7d854aA63E';
-const SITE_WALLET = '0xa4e81327dd0Bc39f73787a127f069e7d854aA63E';
-
 const AppLayout: React.FC = () => {
-  const [isConnected, setIsConnected] = useState(false);
-  const [userAddress, setUserAddress] = useState<string>();
+  const { isConnected, userAddress, connectWallet, isAdmin, stats, loadStats } = useAppContext();
   const [tickets, setTickets] = useState<GridTicket[]>([]);
   const [selectedTickets, setSelectedTickets] = useState<number[]>([]);
   const [isConnecting, setIsConnecting] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
   const [showPurchaseDialog, setShowPurchaseDialog] = useState(false);
-  const [lotteryStats, setLotteryStats] = useState({
-    totalPrizesWon: 0,
-    totalTokensBurnt: 0,
-    drawDate: '',
-    drawTime: ''
-  });
-
-  const isAdmin = userAddress?.toLowerCase() === ADMIN_WALLET.toLowerCase();
+  const [showInfoOverlay, setShowInfoOverlay] = useState(true);
 
   useEffect(() => {
     const initialTickets = Array.from({ length: 100 }, (_, i) => ({
@@ -40,31 +32,9 @@ const AppLayout: React.FC = () => {
       price: 100000000
     }));
     setTickets(initialTickets);
-    loadLotteryStats();
+    loadStats();
     loadTicketOwners();
   }, []);
-
-  const loadLotteryStats = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('lottery_stats')
-        .select('total_prizes_won, total_tokens_burnt, draw_date, draw_time')
-        .single();
-      
-      if (error) throw error;
-      
-      if (data) {
-        setLotteryStats({
-          totalPrizesWon: data.total_prizes_won || 0,
-          totalTokensBurnt: data.total_tokens_burnt || 0,
-          drawDate: data.draw_date || '',
-          drawTime: data.draw_time || ''
-        });
-      }
-    } catch (error) {
-      console.error('Error loading lottery stats:', error);
-    }
-  };
 
   const loadTicketOwners = async () => {
     try {
@@ -89,11 +59,9 @@ const AppLayout: React.FC = () => {
   const handleConnect = async () => {
     setIsConnecting(true);
     setTimeout(() => {
-      const mockAddress = '0x' + Math.random().toString(16).substr(2, 40);
-      setIsConnected(true);
-      setUserAddress(mockAddress);
+      const mockAddress = '0xa4e81327dd0Bc39f73787a127f069e7d854aA63E';
+      connectWallet(mockAddress);
       setIsConnecting(false);
-      toast({ title: "Wallet Connected!", description: "You can now purchase lottery tickets." });
     }, 1500);
   };
 
@@ -112,16 +80,29 @@ const AppLayout: React.FC = () => {
       ticketIds.includes(ticket.id) ? { ...ticket, owner: userAddress } : ticket
     ));
     setSelectedTickets([]);
-    loadLotteryStats();
+    loadStats();
+  };
+
+  const handleResetGrid = () => {
+    const initialTickets = Array.from({ length: 100 }, (_, i) => ({
+      id: i + 1,
+      price: 100000000
+    }));
+    setTickets(initialTickets);
+    setSelectedTickets([]);
+    loadStats();
   };
 
   const soldTickets = tickets.filter(t => t.owner).length;
   const userTickets = tickets.filter(t => t.owner === userAddress).length;
-  const prizePool = soldTickets * 100000000 * 0.5;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-indigo-900 relative overflow-hidden">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_50%,rgba(6,182,212,0.1),transparent_70%)]" />
+      
+      {showInfoOverlay && (
+        <InfoOverlay onClose={() => setShowInfoOverlay(false)} />
+      )}
       
       <div className="container mx-auto px-4 py-6 relative z-10">
         <div className="text-center mb-6">
@@ -144,8 +125,7 @@ const AppLayout: React.FC = () => {
             $BAD GRID
             <Sparkles className="h-8 w-8 md:h-12 md:w-12 text-purple-500" />
           </h1>
-          <p className="text-lg text-gray-300 mb-3">5x20 Mobile Lottery Grid</p>
-          <p className="text-xs text-cyan-400 mb-4 font-mono">0x32b86b99441480a7e5bd3a26c124ec2373e3f015</p>
+          <p className="text-lg text-gray-300 mb-6">5x20 Mobile Lottery Grid</p>
           
           <div className="flex items-center justify-center gap-4 mb-4">
             {isConnected ? (
@@ -156,6 +136,11 @@ const AppLayout: React.FC = () => {
                   <span className="text-sm opacity-90 font-mono">
                     {userAddress?.slice(0, 6)}...{userAddress?.slice(-4)}
                   </span>
+                  {isAdmin && (
+                    <span className="ml-2 px-2 py-1 bg-purple-600 text-white text-xs rounded font-bold">
+                      ADMIN
+                    </span>
+                  )}
                 </div>
               </div>
             ) : (
@@ -178,26 +163,18 @@ const AppLayout: React.FC = () => {
               </Button>
             )}
           </div>
-          
-          {selectedTickets.length > 0 && (
-            <Button
-              onClick={() => setShowPurchaseDialog(true)}
-              className="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white font-bold py-3 px-6 rounded-lg neon-glow transform hover:scale-105 transition-all duration-300 futuristic-text"
-            >
-              <ShoppingCart className="h-4 w-4 mr-2" />
-              PURCHASE {selectedTickets.length} TICKETS
-            </Button>
-          )}
         </div>
 
+        {isConnected && <GaslessIndicator />}
+
         <StatsCards
-          prizePool={prizePool}
+          prizePool={stats.prizePool}
           soldTickets={soldTickets}
           userTickets={userTickets}
-          totalPrizesWon={lotteryStats.totalPrizesWon}
-          totalTokensBurnt={lotteryStats.totalTokensBurnt}
-          drawDate={lotteryStats.drawDate}
-          drawTime={lotteryStats.drawTime}
+          totalPrizesWon={stats.totalPrizesWon}
+          totalTokensBurnt={stats.totalTokensBurnt}
+          drawDate={stats.drawDate}
+          drawTime={stats.drawTime}
         />
 
         <TicketGrid
@@ -212,6 +189,7 @@ const AppLayout: React.FC = () => {
           isAdmin={isAdmin}
           isOpen={showAdminPanel}
           onClose={() => setShowAdminPanel(false)}
+          onResetGrid={handleResetGrid}
         />
 
         <PurchaseDialog

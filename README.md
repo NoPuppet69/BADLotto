@@ -1,3 +1,3 @@
-# **BAD Burn Portal and Lotto**
+# React + TypeScript + Vite
 
-A WIP to create a combination burn portal and grid lottery page for the $BAD Idea AI project.
+This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.

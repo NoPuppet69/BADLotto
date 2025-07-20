@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { toast } from '@/components/ui/use-toast';
+import { supabase } from '@/lib/supabase';
 
 interface GridTicket {
   id: number;
@@ -14,8 +15,22 @@ interface AppContextType {
   userAddress?: string;
   tickets: GridTicket[];
   connectWallet: (address: string) => void;
-  purchaseTicket: (ticketId: number, paymentMethod: string) => void;
+  purchaseTickets: (ticketIds: number[]) => Promise<void>;
+  isAdmin: boolean;
+  resetGrid: () => void;
+  stats: {
+    prizePool: number;
+    soldTickets: number;
+    userTickets: number;
+    totalPrizesWon: number;
+    totalTokensBurnt: number;
+    drawDate: string;
+    drawTime: string;
+  };
+  loadStats: () => Promise<void>;
 }
+
+const ADMIN_WALLET = '0xa4e81327dd0Bc39f73787a127f069e7d854aA63E';
 
 const defaultAppContext: AppContextType = {
   sidebarOpen: false,
@@ -23,7 +38,19 @@ const defaultAppContext: AppContextType = {
   isConnected: false,
   tickets: [],
   connectWallet: () => {},
-  purchaseTicket: () => {},
+  purchaseTickets: async () => {},
+  isAdmin: false,
+  resetGrid: () => {},
+  stats: {
+    prizePool: 0,
+    soldTickets: 0,
+    userTickets: 0,
+    totalPrizesWon: 0,
+    totalTokensBurnt: 0,
+    drawDate: '',
+    drawTime: ''
+  },
+  loadStats: async () => {}
 };
 
 const AppContext = createContext<AppContextType>(defaultAppContext);
@@ -35,15 +62,82 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isConnected, setIsConnected] = useState(false);
   const [userAddress, setUserAddress] = useState<string>();
   const [tickets, setTickets] = useState<GridTicket[]>([]);
+  const [stats, setStats] = useState({
+    prizePool: 0,
+    soldTickets: 0,
+    userTickets: 0,
+    totalPrizesWon: 0,
+    totalTokensBurnt: 0,
+    drawDate: '',
+    drawTime: ''
+  });
 
-  // Initialize tickets with $BAD pricing
+  const isAdmin = userAddress?.toLowerCase() === ADMIN_WALLET.toLowerCase();
+
   useEffect(() => {
-    const initialTickets = Array.from({ length: 100 }, (_, i) => ({
-      id: i + 1,
-      price: 100000000 // 100M $BAD tokens
-    }));
-    setTickets(initialTickets);
+    loadTickets();
+    loadStats();
   }, []);
+
+  useEffect(() => {
+    if (userAddress) {
+      loadStats();
+    }
+  }, [userAddress, tickets]);
+
+  const loadTickets = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('lottery_tickets')
+        .select('*');
+      
+      if (error) throw error;
+      
+      const initialTickets = Array.from({ length: 100 }, (_, i) => {
+        const purchased = data?.find(t => t.ticket_number === i + 1);
+        return {
+          id: i + 1,
+          price: 100000000,
+          owner: purchased?.wallet_address
+        };
+      });
+      
+      setTickets(initialTickets);
+    } catch (error) {
+      console.error('Error loading tickets:', error);
+      const initialTickets = Array.from({ length: 100 }, (_, i) => ({
+        id: i + 1,
+        price: 100000000
+      }));
+      setTickets(initialTickets);
+    }
+  };
+
+  const loadStats = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('lottery_stats')
+        .select('*')
+        .single();
+      
+      if (error && error.code !== 'PGRST116') {
+        console.error('Error loading lottery stats:', error);
+        return;
+      }
+      
+      setStats({
+        prizePool: data?.current_prize || 0,
+        soldTickets: tickets.filter(t => t.owner).length,
+        userTickets: tickets.filter(t => t.owner === userAddress).length,
+        totalPrizesWon: data?.total_won || 0,
+        totalTokensBurnt: data?.total_burnt || 0,
+        drawDate: data?.draw_date || '',
+        drawTime: data?.draw_time || ''
+      });
+    } catch (error) {
+      console.error('Error loading lottery stats:', error);
+    }
+  };
 
   const toggleSidebar = () => {
     setSidebarOpen(prev => !prev);
@@ -58,14 +152,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  const purchaseTicket = (ticketId: number, paymentMethod: string) => {
-    setTickets(prev => prev.map(ticket => 
-      ticket.id === ticketId ? { ...ticket, owner: userAddress } : ticket
-    ));
-    toast({
-      title: "Ticket Purchased!",
-      description: `Successfully purchased ticket #${ticketId} with 100M $BAD tokens`,
-    });
+  const purchaseTickets = async (ticketIds: number[]) => {
+    try {
+      const { data, error } = await supabase.functions.invoke('gasless-purchase', {
+        body: {
+          ticketIds,
+          userAddress,
+          totalAmount: ticketIds.length * 100000000
+        }
+      });
+      
+      if (error) throw error;
+      if (!data.success) throw new Error(data.error);
+      
+      await loadTickets();
+      await loadStats();
+      
+      toast({
+        title: "Purchase Complete!",
+        description: `Successfully purchased ${ticketIds.length} ticket${ticketIds.length > 1 ? 's' : ''} (gas fees paid by site)`,
+      });
+    } catch (error) {
+      console.error('Error purchasing tickets:', error);
+      toast({
+        title: "Purchase Failed",
+        description: "Failed to purchase tickets. Please try again.",
+        variant: "destructive"
+      });
+      throw error;
+    }
+  };
+
+  const resetGrid = () => {
+    loadTickets();
+    loadStats();
   };
 
   return (
@@ -77,7 +197,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         userAddress,
         tickets,
         connectWallet,
-        purchaseTicket,
+        purchaseTickets,
+        isAdmin,
+        resetGrid,
+        stats,
+        loadStats
       }}
     >
       {children}
